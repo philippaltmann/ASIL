@@ -331,18 +331,30 @@ class PPO2(ActorCriticRLModel):
                 cliprange_now = self.cliprange(frac)
                 cliprange_vf_now = cliprange_vf(frac)
 
+                # BEGIN Change
+                callback.update_locals(locals())
+                # END Change
                 callback.on_rollout_start()
                 # true_reward is the reward without discount
                 rollout = self.runner.run(callback)
                 # Unpack
                 obs, returns, masks, actions, values, neglogpacs, states, ep_infos, true_reward = rollout
 
+                # BEGIN Change
+                callback.update_locals(locals())
+                # END Change
                 callback.on_rollout_end()
+
+                # BEGIN Change
+                # Overwrite Rewards from Callback
+                if callback is not None:
+                    true_reward = callback.locals['true_reward']
+                    returns = callback.locals['returns']
+                # END Change
 
                 # Early stopping due to the callback
                 if not self.runner.continue_training:
                     break
-
                 self.ep_info_buf.extend(ep_infos)
                 mb_loss_vals = []
                 if states is None:  # nonrecurrent version
@@ -483,6 +495,11 @@ class Runner(AbstractEnvRunner):
 
             self.model.num_timesteps += self.n_envs
 
+            # BEGIN Change
+            true_reward = np.copy(rewards)
+            # Local Dones duplicate to discount d_rewards
+            dones, obs, states = self.dones, self.obs, self.states
+            # END Change
             if self.callback is not None:
                 # Abort training early
                 self.callback.update_locals(locals())
@@ -490,6 +507,11 @@ class Runner(AbstractEnvRunner):
                     self.continue_training = False
                     # Return dummy values
                     return [None] * 9
+                # BEGIN Change
+                if rewards != self.callback.locals['rewards']:
+                    rewards = self.callback.locals['rewards']
+                    assert rewards != true_reward, "Reward seem to be unaffected\nBefore:\t{}\t{}\nAfter:\t{}\t{}".format(tmp_rewards, test_before, rewards, test_after)
+                # END Change
 
             for info in infos:
                 maybe_ep_info = info.get('episode')
