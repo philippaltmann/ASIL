@@ -414,6 +414,7 @@ class LeanAdversaryCallback(BaseCallback):
         if (self.model.env_name == 'CartPole-v1'
             and np.mean(self.model.moving_reward) >= 475
                 and self.model.terminate_on_solve):
+            self.model.finish_hparams(self.locals['writer'])
             return
 
         # Get Variables
