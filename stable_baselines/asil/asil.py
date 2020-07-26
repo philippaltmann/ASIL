@@ -7,7 +7,9 @@ from stable_baselines import logger
 from stable_baselines.ppo2 import PPO2
 from stable_baselines.ppo2.ppo2 import swap_and_flatten
 
-from stable_baselines.common.callbacks import BaseCallback
+from stable_baselines.common.callbacks import BaseCallback, CallbackList
+from stable_baselines.asil.callbacks import EarlyStoppingCallback
+from stable_baselines.asil.callbacks import LoggingCallback
 from stable_baselines.asil.adversary import TransitionClassifier
 # from stable_baselines.common.mpi_adam import MpiAdam
 
@@ -58,8 +60,7 @@ class ASIL(PPO2):
 
     :param use_gasil: (bool) Whether or not to use GASIL Reward for learning
     :param sil_samples: (int) Max Number of trajectories stored in SIL Buffer
-    :param g_step: (int) number of steps to train policy in each epoch
-        (Train Discriminator every after n policy updates)
+    :param sil_update: (int) The frequency of learning the Discriminator
     :param adversary_step: (int) number of steps to train discriminator in each epoch
     :param adversary_entcoeff: (float) the adversary entropy coefficient (1e-3)
     :param sil_alpha: (float) the weight of the Discriminator Reward.
@@ -74,9 +75,8 @@ class ASIL(PPO2):
                  verbose=0, tensorboard_log=None, _init_setup_model=True, policy_kwargs=None,
                  full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None,
                  adversary_hidden_size=100, adversary_entcoeff=1e-3, sil_alpha=1.0,
-                 g_step=3, adversary_step=1, adversary_stepsize=3e-4, sil_samples=512,
-                 use_gasil=True, env_name="", terminate_on_solve=False, **kwargs):
-
+                 sil_update=1, adversary_step=1, adversary_stepsize=3e-4, sil_samples=512,
+                 use_gasil=True, terminate_on_solve=False, max_episodes=1000, **kwargs):
         # super().__init__(policy, env, verbose=verbose, _init_setup_model=False, **kwargs)
         logger.log("Init")
         super().__init__(policy, env, gamma=gamma, n_steps=n_steps,
@@ -92,10 +92,9 @@ class ASIL(PPO2):
 
         # GAIL Params
         self.use_gasil = use_gasil
-        self.g_step = g_step  # TODO: use this
-
         self.sil_alpha = sil_alpha
         self.sil_samples = sil_samples
+        self.sil_update = sil_update
         self.buffer = RewardBuffer(size=sil_samples)
 
         self.adversary = None
@@ -111,8 +110,8 @@ class ASIL(PPO2):
         self.current_episode = 0
         self.moving_reward = deque([], maxlen=100)
         self.terminate_on_solve = terminate_on_solve
-        self.env_name = env_name  # For HParam Logging
-
+        self.max_episodes = max_episodes
+        self.stop = False
         if _init_setup_model:
             self.setup_model()
 
@@ -199,65 +198,20 @@ class ASIL(PPO2):
 
         return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
 
-    def learn(self, total_timesteps, callback=None, log_interval=100, tb_log_name="GASIL",
+    def learn(self, total_timesteps, callback=None, log_interval=100, tb_log_name="ASIL",
               reset_num_timesteps=True):
-        callback = LeanAdversaryCallback(verbose=self.verbose)
+        env_name = self.env.envs[0].unwrapped.spec.id
+        threshold = self.env.envs[0].unwrapped.spec.reward_threshold
+        logging = LoggingCallback(env_name=env_name, verbose=self.verbose)
+        stopping = EarlyStoppingCallback(threshold, env_name, verbose=self.verbose)
+        learning = LeanAdversaryCallback(verbose=self.verbose)
+        callback = CallbackList([learning, logging, stopping])
         return super().learn(
             total_timesteps, callback=callback, log_interval=log_interval,
             tb_log_name='', reset_num_timesteps=reset_num_timesteps)
 
-    def write_hparams(self, writer):
-        """Returns a summary proto buffer holding this experiment"""
-        import hashlib
-        from tensorboard.plugins.hparams import api_pb2
-        from tensorboard.plugins.hparams import summary
-
-        hparams = {
-            'alpha': self.sil_alpha,
-            'buffer': self.sil_samples
-        }
-        # "GASIL Evaluation"
-        group_name = hashlib.md5(str(hparams).encode('utf-8')).hexdigest()
-        group_name = "{}:{}_{}".format(self.env_name, self.sil_samples, self.sil_alpha)
-
-        writer.add_summary(summary.experiment_pb(
-            hparam_infos=[
-                api_pb2.HParamInfo(
-                    name="alpha", display_name="Reward Mixture", type=api_pb2.DATA_TYPE_FLOAT64,
-                    domain_interval=api_pb2.Interval(min_value=0.0, max_value=1.0)),
-                api_pb2.HParamInfo(
-                    name="buffer", display_name="Imitation Buffer Size", type=api_pb2.DATA_TYPE_FLOAT64,
-                    domain_interval=api_pb2.Interval(min_value=64.0, max_value=1024.0))
-            ],
-            metric_infos=[
-                api_pb2.MetricInfo(
-                    name=api_pb2.MetricName(tag="rewards/environment_reward"),
-                    display_name="Accumulated Environment Reward"),
-                api_pb2.MetricInfo(
-                    name=api_pb2.MetricName(tag="adversary_loss/mean_reward_in_buffer"),
-                    display_name="Mean Reward in Buffer"),
-                api_pb2.MetricInfo(
-                    name=api_pb2.MetricName(tag="rewards/mean_reward"),
-                    display_name="Mean Reward over last 100 Episodes"),
-                api_pb2.MetricInfo(
-                    name=api_pb2.MetricName(tag="rewards/number_episodes"),
-                    display_name="Number of training episodes")
-            ]
-        ))
-
-        writer.add_summary(summary.session_start_pb(hparams=hparams, group_name=group_name))
-        writer.flush()
-
-    def finish_hparams(self, writer):
-        """Returns a summary proto buffer holding this experiment"""
-        from tensorboard.plugins.hparams import api_pb2
-        from tensorboard.plugins.hparams import summary
-        writer.add_summary(summary.session_end_pb(api_pb2.STATUS_SUCCESS))
-        writer.flush()
-
-    def save(self, save_path, cloudpickle=False):
-        # verbose=0, tensorboard_log=None, _init_setup_model=True, full_tensorboard_log=False,
-        data = {
+    def get_hparams(self):
+        return {
             "gamma": self.gamma,
             "n_steps": self.n_steps,
             "vf_coef": self.vf_coef,
@@ -280,13 +234,16 @@ class ASIL(PPO2):
             "policy_kwargs": self.policy_kwargs,
             "adversary_hidden_size": self.adversary_hidden_size,
             "adversary_entcoeff": self.adversary_entcoeff,
-            "g_step": self.g_step,
+            "sil_update": self.sil_update,
             "adversary_step": self.adversary_step,
             "adversary_stepsize": self.adversary_stepsize,
             "sil_samples": self.sil_samples,
             "use_gasil": self.use_gasil
         }
 
+    def save(self, save_path, cloudpickle=False):
+        # verbose=0, tensorboard_log=None, _init_setup_model=True, full_tensorboard_log=False,
+        data = self.get_hparams()
         params_to_save = self.get_parameters()
 
         self._save_to_file(save_path, data=data, params=params_to_save, cloudpickle=cloudpickle)
@@ -318,13 +275,6 @@ class LeanAdversaryCallback(BaseCallback):
         # # to have access to the parent object
         # self.parent = None  # type: Optional[BaseCallback]
 
-    def _on_training_start(self) -> None:
-        """
-        This method is called before the first rollout starts.
-        """
-        w = self.locals['writer']
-        self.model.write_hparams(writer=w)
-
     def _on_rollout_start(self) -> None:
         """
         A rollout is the collection of environment interaction
@@ -349,15 +299,7 @@ class LeanAdversaryCallback(BaseCallback):
         reward = self.model.adversary.get_reward(observation, action[0], [env_reward])
         self.model.d_rewards.append(reward[0])
 
-        # Write Detailed Reward Summary
-        summary = tf.Summary(value=[
-            tf.Summary.Value(tag='rewards/discriminator', simple_value=reward),
-            tf.Summary.Value(tag='rewards/environment', simple_value=env_reward[0])
-        ])
-        self.locals['writer'].add_summary(summary, self.num_timesteps)
-
         # For discounting D rewards after Rollout
-
         if self.num_timesteps % self.model.n_steps == 0:
 
             # Reshabe Discriminator Reward
@@ -390,33 +332,16 @@ class LeanAdversaryCallback(BaseCallback):
                 d_adv[step] = last_gae_lam = delta + self.model.gamma * self.model.lam * nextnonterminal * last_gae_lam
             d_returns = d_adv + mb_values
 
-            # Write Value to reward summary
-            self.locals['writer'].add_summary(tf.Summary(value=[tf.Summary.Value(
-                tag='rewards/value', simple_value=np.mean(mb_values, axis=1)[0])
-            ]), self.num_timesteps)
-
             d_returns, d_true_reward = map(swap_and_flatten, (d_returns, d_true_reward))
             self.d_returns = d_returns
             self.d_true_reward = d_true_reward
-        # Early Stopping
-        if (self.model.env_name == 'CartPole-v1'
-            and np.mean(self.model.moving_reward) >= 475
-                and self.model.terminate_on_solve):
-            logger.log("Solved {} in {} Episodes".format(
-                self.model.env_name, self.model.total_episodes))
-            return False
 
     def _on_rollout_end(self) -> None:
         """
         This event is triggered before updating the policy.
         """
-        # Early Stopping
-        if (self.model.env_name == 'CartPole-v1'
-            and np.mean(self.model.moving_reward) >= 475
-                and self.model.terminate_on_solve):
-            self.model.finish_hparams(self.locals['writer'])
+        if self.model.stop:  # Prevent Early stopping error
             return
-
         # Get Variables
         observations = self.locals['obs']
         actions = self.locals['actions']
@@ -428,43 +353,21 @@ class LeanAdversaryCallback(BaseCallback):
         # Update Buffer
         rewards = true_rewards.reshape((n_steps, 1))
         self.model.buffer.extend(observations, actions, rewards, returns)
-        buffer_rewards = [reward for _, _, _, reward in self.model.buffer.storage]
 
         # Train Adversary
-        assert len(observations) == n_steps
-        batch_size = n_steps // self.model.adversary_step
-        d_losses = self.model.adversary.learn(
-            observations, actions, rewards, self.model.buffer, batch_size
-        )
+        if (self.num_timesteps // n_steps) % self.model.sil_update == 0:
+            # logger.log("Updating SIL at {}//{}%{}={}".format(self.num_timesteps, n_steps, self.model.sil_update, (self.num_timesteps // n_steps) % self.model.sil_update))
+            assert len(observations) == n_steps
+            batch_size = n_steps // self.model.adversary_step
+            d_losses = self.model.adversary.learn(
+                observations, actions, rewards, self.model.buffer, batch_size,
+                writer, self.num_timesteps
+            )
+        # else:
+        #     self.model.d_batch.append()
+            # logger.log("Not updating SIL at {}//{}%{}={}".format(self.num_timesteps, n_steps,self.model.sil_update,  (self.num_timesteps // n_steps) % self.model.sil_update))
 
         # Overwrite PPO Return & Reward
         if self.model.use_gasil:
             self.locals['true_reward'] = self.d_true_reward  # d_rewards
             self.locals['returns'] = self.d_returns  # d_rewards
-
-        # Write Tensorboard Summary
-        for info in self.locals['ep_infos']:
-            self.model.total_episodes += 1
-            self.model.current_episode += info['l']
-            self.model.moving_reward.append(info['r'])
-            writer.add_summary(tf.Summary(value=[
-                tf.Summary.Value(tag='rewards/episode_length',
-                                 simple_value=info['l']),
-                tf.Summary.Value(tag='rewards/environment_reward',
-                                 simple_value=info['r']),
-                tf.Summary.Value(tag='rewards/mean_reward',
-                                 simple_value=np.mean(self.model.moving_reward)),
-                tf.Summary.Value(tag='rewards/number_episodes',
-                                 simple_value=self.model.total_episodes)
-            ]), self.model.current_episode)
-
-        summary = tf.Summary(value=[
-            tf.Summary.Value(tag='adversary_loss/samples_in_buffer',
-                             simple_value=len(self.model.buffer)),
-            tf.Summary.Value(tag='adversary_loss/mean_reward_in_buffer',
-                             simple_value=np.mean(buffer_rewards)),
-            tf.Summary.Value(tag='adversary_loss/discriminator_loss',
-                             simple_value=np.mean(d_losses, axis=1)[0])
-        ])
-        self.locals['writer'].add_summary(summary, self.num_timesteps)
-        logger.logkv("d_losses", np.mean(d_losses, axis=1)[0])
