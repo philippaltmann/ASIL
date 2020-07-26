@@ -201,7 +201,7 @@ class TransitionClassifier(object):
         reward = self.session.run(self.reward_op, feed_dict)
         return reward
 
-    def learn(self, observations, actions, rewards, buffer, batch_size):
+    def learn(self, observations, actions, rewards, buffer, batch_size, writer, num_timesteps):
         """
         Update the discriminator network with current observations and buffer
         :param observations: (np.ndarray) the last policy observations
@@ -241,4 +241,8 @@ class TransitionClassifier(object):
                 # Allmean from TRPO not needed ? using MPI self.allmean(grad)
                 self.trainer.update(grad, self.stepsize)
                 d_losses.append(newlosses)
+            writer.add_summary(tf.Summary(value=[
+                tf.Summary.Value(tag='adversary_loss/discriminator_loss',
+                                 simple_value=np.mean(d_losses))
+            ]), num_timesteps)
         return d_losses
