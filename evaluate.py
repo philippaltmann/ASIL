@@ -12,8 +12,8 @@ max_episodes = None
 sil_alpha = float(sys.argv[2])
 sil_update = int(sys.argv[3])
 sil_samples = int(sys.argv[4])
-run = int(sys.argv[4])
-terminate_on_solve = len(sys.argv) == 6
+run = int(sys.argv[5])
+terminate_on_solve = len(sys.argv) == 7
 
 # Usage:
 # # xvfb-run -s "-screen 0 1400x900x24" python3 evaluate.py CartPole 1 512 T
