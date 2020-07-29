@@ -222,7 +222,7 @@ class TransitionClassifier(object):
                 (observations, actions, rewards), batch_size=batch_size,
                     include_final_partial_batch=False, shuffle=True):
 
-                ob_expert, ac_expert, re_expert, _ = buffer.sample(batch_size=batch_size)
+                ob_expert, ac_expert, re_expert = buffer.sample(batch_size=batch_size)
                 # ob_expert, ac_expert = self.expert_dataset.get_next_batch()
                 # update running mean/std for reward_giver
                 # TODO whats that doing ??
