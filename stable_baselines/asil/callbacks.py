@@ -20,12 +20,16 @@ class LoggingCallback(BaseCallback):
         from tensorboard.plugins.hparams import api_pb2
         hparams = {
             'alpha': self.model.sil_alpha,
+            'update': self.model.sil_update,
             'buffer': self.model.sil_samples
         }
         group_name = "{}:{}_{}".format(self.env_name, hparams['buffer'], hparams['alpha'])
         hparam_infos = [
             api_pb2.HParamInfo(
                 name="alpha", display_name="Reward Mixture", type=api_pb2.DATA_TYPE_FLOAT64,
+                domain_interval=api_pb2.Interval(min_value=0.0, max_value=1.0)),
+            api_pb2.HParamInfo(
+                name="update", display_name="Adversary Update Frequency", type=api_pb2.DATA_TYPE_FLOAT64,
                 domain_interval=api_pb2.Interval(min_value=0.0, max_value=1.0)),
             api_pb2.HParamInfo(
                 name="buffer", display_name="Imitation Buffer Size", type=api_pb2.DATA_TYPE_FLOAT64,
@@ -97,7 +101,7 @@ class LoggingCallback(BaseCallback):
         true_reward = self.locals['true_reward']
         ep_infos = self.locals['ep_infos']
         writer = self.locals['writer']
-        buffer_rewards = [r for _, _, _, r in self.model.buffer.storage]
+        buffer_rewards = [r for _, _, r in self.model.buffer.storage]
 
         # Write Success to HParams
         if self.model.stop:
@@ -131,7 +135,9 @@ class LoggingCallback(BaseCallback):
             tf.Summary.Value(tag='adversary_loss/samples_in_buffer',
                              simple_value=len(self.model.buffer)),
             tf.Summary.Value(tag='adversary_loss/mean_reward_in_buffer',
-                             simple_value=np.mean(buffer_rewards))
+                             simple_value=np.mean(buffer_rewards)),
+            tf.Summary.Value(tag='adversary_loss/buffer_updates',
+                             simple_value=self.model.buffer.overwrites)
         ]), self.num_timesteps)
         logger.logkv("100_mean_reward", np.mean(self.model.moving_reward))
 
