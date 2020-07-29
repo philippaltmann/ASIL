@@ -24,6 +24,7 @@ class RewardBuffer(object):
         self._storage = []
         self._maxsize = size
         self._next_idx = 0
+        self.overwrites = 0
 
     def __len__(self) -> int:
         return len(self._storage)
@@ -56,26 +57,27 @@ class RewardBuffer(object):
         """
         return len(self) == self.buffer_size
 
-    def add(self, obs, action, reward, retrun):
+    def add(self, obs, action, reward):
         """
         add a new transition to the buffer if reward is k-highest
 
         :param obs: (Union[np.ndarray, int]) the last observation
         :param action: (Union[np.ndarray, int]) the action
-        :param reward: (float) the true reward of the transition
         :param reward: (float) the return used for sorting
         """
-        data = (obs, action, reward, retrun)
+        data = (obs, action, reward)
         insert_index = len(self)
         # Insertion Sort
         # Move Insert Index forward while added reward is higher
-        while insert_index > 0 and self._storage[insert_index - 1][3] <= retrun:
+        while insert_index > 0 and self._storage[insert_index - 1][2] <= reward:
             insert_index -= 1
+        if insert_index < self._maxsize:
+            self.overwrites += 1
         self._storage.insert(insert_index, data)
         if len(self) > self.buffer_size:
             self._storage = self._storage[:self.buffer_size]
 
-    def extend(self, obs, action, reward, retrun):
+    def extend(self, obs, action, reward):
         """
         add a new batch of transitions to the buffer
 
@@ -86,8 +88,8 @@ class RewardBuffer(object):
         Note: uses the same names as .add to keep compatibility with named argument passing
                 but expects iterables and arrays with more than 1 dimensions
         """
-        for o, a, r, s in zip(obs, action, reward, retrun):
-            self.add(o, a, r, s)
+        for o, a, r in zip(obs, action, reward):
+            self.add(o, a, r)
 
     @staticmethod
     def _normalize_obs(obs: np.ndarray,
@@ -110,17 +112,15 @@ class RewardBuffer(object):
         return reward
 
     def _encode_sample(self, idxes: Union[List[int], np.ndarray], env: Optional[VecNormalize] = None):
-        obses, actions, rewards, returns = [], [], [], []
+        obses, actions, returns = [], [], []
         for i in idxes:
             data = self._storage[i]
-            obs, action, reward, retrun = data
+            obs, action, reward = data
             obses.append(np.array(obs, copy=False))
             actions.append(np.array(action, copy=False))
-            rewards.append(reward)
-            returns.append(retrun)
+            returns.append(reward)
         return (self._normalize_obs(np.array(obses), env),
                 np.array(actions),
-                self._normalize_reward(np.array(rewards), env),
                 self._normalize_reward(np.array(returns), env))
 
     def sample(self, batch_size: int, env: Optional[VecNormalize] = None, **_kwargs):
