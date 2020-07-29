@@ -15,7 +15,6 @@ from stable_baselines.asil.adversary import TransitionClassifier
 
 from stable_baselines.asil.buffer import RewardBuffer
 # from stable_baselines.common import dataset
-from tensorboard.plugins.hparams import api as hp
 
 
 
@@ -164,7 +163,8 @@ class ASIL(PPO2):
             td_map[self.train_model.states_ph] = states
             td_map[self.train_model.dones_ph] = masks
 
-        expert_obs, expert_acs, expert_rew, _ = self.buffer.sample(len(obs))
+        # expert_obs, expert_acs, expert_rew, _ = self.buffer.sample(len(obs))
+        expert_obs, expert_acs, expert_rew = self.buffer.sample(len(obs))
         td_map[self.adversary.expert_obs_ph] = expert_obs
         td_map[self.adversary.expert_acs_ph] = expert_acs
         td_map[self.adversary.expert_rew_ph] = expert_rew
@@ -347,12 +347,29 @@ class LeanAdversaryCallback(BaseCallback):
         actions = self.locals['actions']
         returns = self.locals['returns']
         true_rewards = self.locals['true_reward']
+        masks = self.locals['masks']
         writer = self.locals['writer']
         n_steps = self.model.n_steps
 
+        # Calculate Discounted Return for rollout
+        G = true_rewards.copy()
+        gamma = self.model.gamma  # 1
+        for step in reversed(range(self.model.n_steps)):
+            if step == self.model.n_steps - 1:
+                nextnonterminal = 1.0 - self.model.runner.dones
+                nextvalues = self.model.value(self.model.runner.obs,
+                                              self.model.runner.states,
+                                              self.model.runner.dones)
+            else:
+                nextnonterminal = 1.0 - masks[step + 1]
+                nextvalues = G[step + 1]
+            G[step] = true_rewards[step] + gamma * nextvalues * nextnonterminal
+
         # Update Buffer
-        rewards = true_rewards.reshape((n_steps, 1))
-        self.model.buffer.extend(observations, actions, rewards, returns)
+        # rewards = true_rewards.reshape((n_steps, 1))
+        # rewards = returns.reshape((n_steps, 1))
+        rewards = G.reshape((n_steps, 1))
+        self.model.buffer.extend(observations, actions, rewards)
 
         # Train Adversary
         if (self.num_timesteps // n_steps) % self.model.sil_update == 0:
@@ -366,7 +383,6 @@ class LeanAdversaryCallback(BaseCallback):
         # else:
         #     self.model.d_batch.append()
             # logger.log("Not updating SIL at {}//{}%{}={}".format(self.num_timesteps, n_steps,self.model.sil_update,  (self.num_timesteps // n_steps) % self.model.sil_update))
-
         # Overwrite PPO Return & Reward
         if self.model.use_gasil:
             self.locals['true_reward'] = self.d_true_reward  # d_rewards
