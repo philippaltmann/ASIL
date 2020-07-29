@@ -12,6 +12,7 @@ max_episodes = None
 sil_alpha = float(sys.argv[2])
 sil_update = int(sys.argv[3])
 sil_samples = int(sys.argv[4])
+run = int(sys.argv[4])
 terminate_on_solve = len(sys.argv) == 6
 
 # Usage:
@@ -31,12 +32,12 @@ else:
 
 use_gasil = True  # TODO read from kwargs in main
 
-run = 1
+# run = 1
 base_path = "eval/{}/{}_{}_{}/{}/".format(env_arg, sil_alpha, sil_update, sil_samples, run)
 # base_path = "new_logs/{}/{}/{}/".format(env_name, algorithm, run_index)
-while os.path.exists(base_path):
-    run += 1
-    base_path = "eval/{}/{}_{}_{}/{}/".format(env_arg, sil_alpha, sil_update, sil_samples, run)
+# while os.path.exists(base_path):
+#     run += 1
+#     base_path = "eval/{}/{}_{}_{}/{}/".format(env_arg, sil_alpha, sil_update, sil_samples, run)
     # base_path = "new_logs/{}/{}/{}/".format(env_name,  algorithm, run_index)
 
 model_dir = '{}model/'.format(base_path)
