@@ -27,6 +27,7 @@ keys/
 *.sublime-workspace
 
 logs/
+eval/
 
 .ipynb_checkpoints
 ghostdriver.log
