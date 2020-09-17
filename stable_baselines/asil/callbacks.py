@@ -140,6 +140,8 @@ class LoggingCallback(BaseCallback):
                              simple_value=self.model.buffer.overwrites)
         ]), self.num_timesteps)
         logger.logkv("100_mean_reward", np.mean(self.model.moving_reward))
+        logger.logkv("mean_adv_reward", np.mean(reward))
+        logger.logkv("mean_buf_reward", np.mean(buffer_rewards))
 
 
 class EarlyStoppingCallback(BaseCallback):
