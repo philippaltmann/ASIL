@@ -11,14 +11,7 @@ from stable_baselines.common.callbacks import BaseCallback, CallbackList
 from stable_baselines.asil.callbacks import EarlyStoppingCallback
 from stable_baselines.asil.callbacks import LoggingCallback
 from stable_baselines.asil.adversary import TransitionClassifier
-# from stable_baselines.common.mpi_adam import MpiAdam
-
 from stable_baselines.asil.buffer import RewardBuffer
-# from stable_baselines.common import dataset
-
-
-
-# from stable_baselines.common import explained_variance, ActorCriticRLModel, SetVerbosity, TensorboardWriter, dataset
 
 
 class ASIL(PPO2):
@@ -72,7 +65,7 @@ class ASIL(PPO2):
     def __init__(self, policy, env, gamma=0.99, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=0.5,
                  max_grad_norm=0.5, lam=0.95, nminibatches=4, noptepochs=4, cliprange=0.2, cliprange_vf=None,
                  verbose=0, tensorboard_log=None, _init_setup_model=True, policy_kwargs=None,
-                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None,
+                 full_tensorboard_log=False, seed=None, n_cpu_tf_sess=None, threshold=None,
                  adversary_hidden_size=100, adversary_entcoeff=1e-3, sil_alpha=1.0,
                  sil_update=1, adversary_step=1, adversary_stepsize=3e-4, sil_samples=512,
                  use_gasil=True, terminate_on_solve=False, max_episodes=1000, **kwargs):
@@ -111,6 +104,13 @@ class ASIL(PPO2):
         self.terminate_on_solve = terminate_on_solve
         self.max_episodes = max_episodes
         self.stop = False
+        try:
+            self.threshold = float(threshold)
+        except Exception:
+            self.threshold = None
+        if terminate_on_solve:
+            logger.log(f"Stopping at {self.threshold}")
+
         if _init_setup_model:
             self.setup_model()
 
@@ -201,9 +201,10 @@ class ASIL(PPO2):
     def learn(self, total_timesteps, callback=None, log_interval=100, tb_log_name="ASIL",
               reset_num_timesteps=True):
         env_name = self.env.envs[0].unwrapped.spec.id
-        threshold = self.env.envs[0].unwrapped.spec.reward_threshold
+        if self.threshold is None:
+            self.threshold = self.env.envs[0].unwrapped.spec.reward_threshold
         logging = LoggingCallback(env_name=env_name, verbose=self.verbose)
-        stopping = EarlyStoppingCallback(threshold, env_name, verbose=self.verbose)
+        stopping = EarlyStoppingCallback(self.threshold, env_name, verbose=self.verbose)
         learning = LeanAdversaryCallback(verbose=self.verbose)
         callback = CallbackList([learning, logging, stopping])
         return super().learn(
@@ -257,23 +258,6 @@ class LeanAdversaryCallback(BaseCallback):
     """
     def __init__(self, verbose=0):
         super(LeanAdversaryCallback, self).__init__(verbose)
-        # Those variables will be accessible in the callback
-        # (they are defined in the base class)
-        # The RL model
-        # self.model = None  # type: BaseRLModel
-        # An alias for self.model.get_env(), the environment used for training
-        # self.training_env = None  # type: Union[gym.Env, VecEnv, None]
-        # Number of time the callback was called
-        # self.n_calls = 0  # type: int
-        # self.num_timesteps = 0  # type: int
-        # local and global variables
-        # self.locals = None  # type: Dict[str, Any]
-        # self.globals = None  # type: Dict[str, Any]
-        # The logger object, used to report things in the terminal
-        # self.logger = None  # type: logger.Logger
-        # # Sometimes, for event callback, it is useful
-        # # to have access to the parent object
-        # self.parent = None  # type: Optional[BaseCallback]
 
     def _on_rollout_start(self) -> None:
         """
@@ -297,6 +281,7 @@ class LeanAdversaryCallback(BaseCallback):
         action = self.locals['clipped_actions']
         env_reward = self.locals['rewards']
         reward = self.model.adversary.get_reward(observation, action[0], [env_reward])
+        # reward = 1 - self.model.adversary.get_reward(observation, action[0], [env_reward])
         self.model.d_rewards.append(reward[0])
 
         # For discounting D rewards after Rollout
@@ -360,30 +345,24 @@ class LeanAdversaryCallback(BaseCallback):
                 nextvalues = self.model.value(self.model.runner.obs,
                                               self.model.runner.states,
                                               self.model.runner.dones)
+                nextvalues = 0
             else:
                 nextnonterminal = 1.0 - masks[step + 1]
                 nextvalues = G[step + 1]
             G[step] = true_rewards[step] + gamma * nextvalues * nextnonterminal
 
         # Update Buffer
-        # rewards = true_rewards.reshape((n_steps, 1))
-        # rewards = returns.reshape((n_steps, 1))
         rewards = G.reshape((n_steps, 1))
         self.model.buffer.extend(observations, actions, rewards)
 
         # Train Adversary
         if (self.num_timesteps // n_steps) % self.model.sil_update == 0:
-            # logger.log("Updating SIL at {}//{}%{}={}".format(self.num_timesteps, n_steps, self.model.sil_update, (self.num_timesteps // n_steps) % self.model.sil_update))
             assert len(observations) == n_steps
             batch_size = n_steps // self.model.adversary_step
             d_losses = self.model.adversary.learn(
                 observations, actions, rewards, self.model.buffer, batch_size,
                 writer, self.num_timesteps
             )
-        # else:
-        #     self.model.d_batch.append()
-            # logger.log("Not updating SIL at {}//{}%{}={}".format(self.num_timesteps, n_steps,self.model.sil_update,  (self.num_timesteps // n_steps) % self.model.sil_update))
-        # Overwrite PPO Return & Reward
         if self.model.use_gasil:
             self.locals['true_reward'] = self.d_true_reward  # d_rewards
             self.locals['returns'] = self.d_returns  # d_rewards
