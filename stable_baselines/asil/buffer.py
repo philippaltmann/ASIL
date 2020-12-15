@@ -3,11 +3,8 @@ From /common/buffers, adapted Replay Buffer to store State-Action-Rewards only
 Sorting items in storage by reward, removing wost on append, when buffer full
 """
 import random
-from typing import Optional, List, Union
-
 import numpy as np
-
-from stable_baselines.common.segment_tree import SumSegmentTree, MinSegmentTree
+from typing import Optional, List, Union
 from stable_baselines.common.vec_env import VecNormalize
 
 
@@ -38,6 +35,12 @@ class RewardBuffer(object):
     def buffer_size(self) -> int:
         """float: Max capacity of the buffer"""
         return self._maxsize
+
+    @property
+    def diversity(self) -> float:
+        """float: Max capacity of the buffer"""
+        from skbio.diversity import alpha_diversity
+        return np.var(alpha_diversity('shannon', [x[0] for x in self._storage]))
 
     def can_sample(self, n_samples: int) -> bool:
         """

@@ -134,14 +134,17 @@ class LoggingCallback(BaseCallback):
                              simple_value=np.mean(values)),
             tf.Summary.Value(tag='adversary_loss/samples_in_buffer',
                              simple_value=len(self.model.buffer)),
-            tf.Summary.Value(tag='adversary_loss/mean_reward_in_buffer',
+            tf.Summary.Value(tag='buffer/mean_reward',
                              simple_value=np.mean(buffer_rewards)),
-            tf.Summary.Value(tag='adversary_loss/buffer_updates',
-                             simple_value=self.model.buffer.overwrites)
+            tf.Summary.Value(tag='buffer/updates',
+                             simple_value=self.model.buffer.overwrites),
+            tf.Summary.Value(tag='buffer/shannon_diversity',
+                             simple_value=self.model.buffer.diversity)
         ]), self.num_timesteps)
         logger.logkv("100_mean_reward", np.mean(self.model.moving_reward))
         logger.logkv("mean_adv_reward", np.mean(reward))
         logger.logkv("mean_buf_reward", np.mean(buffer_rewards))
+        logger.logkv("shannon_diversity", self.model.buffer.diversity)
 
 
 class EarlyStoppingCallback(BaseCallback):
