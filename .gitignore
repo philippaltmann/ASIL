@@ -23,6 +23,15 @@ keys/
 /env
 /venv
 
+# Atom FTP
+.ftpconfig
+.ftpignore
+
+# Python
+.envrc
+.direnv
+
+
 *.sublime-project
 *.sublime-workspace
 
